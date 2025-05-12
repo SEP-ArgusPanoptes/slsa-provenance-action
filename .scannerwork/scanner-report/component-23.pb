@@ -1,1 +1,1 @@
- 2goXhr(cmd/slsa-provenance/cli/generate_test.go
+ 2goX½hr%cmd/slsa-provenance/cli/files_test.go

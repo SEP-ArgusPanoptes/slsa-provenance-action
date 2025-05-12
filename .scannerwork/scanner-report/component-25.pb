@@ -1,1 +1,1 @@
- 2goXchr.cmd/slsa-provenance/cli/github-release_test.go
+ 2goXhr(cmd/slsa-provenance/cli/generate_test.go

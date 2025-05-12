@@ -1,1 +1,1 @@
-" 2yamlXhrcodecov.yaml
+" 2goX1hr'cmd/slsa-provenance/cli/version_test.go

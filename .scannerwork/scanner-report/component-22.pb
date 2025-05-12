@@ -1,1 +1,1 @@
- 2goXhr#cmd/slsa-provenance/cli/generate.go
+ 2goXBhr cmd/slsa-provenance/cli/files.go

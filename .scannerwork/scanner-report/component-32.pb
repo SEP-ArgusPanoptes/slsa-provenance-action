@@ -1,1 +1,1 @@
-  2goX1hr'cmd/slsa-provenance/cli/version_test.go
+  2goXhr'cmd/slsa-provenance/cli/options/root.go

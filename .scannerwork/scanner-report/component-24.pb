@@ -1,1 +1,1 @@
- 2goXQhr)cmd/slsa-provenance/cli/github-release.go
+ 2goXhr#cmd/slsa-provenance/cli/generate.go

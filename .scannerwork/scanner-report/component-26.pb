@@ -1,1 +1,1 @@
- 2goX!hr(cmd/slsa-provenance/cli/options/files.go
+ 2goXQhr)cmd/slsa-provenance/cli/github-release.go

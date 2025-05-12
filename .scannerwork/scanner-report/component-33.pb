@@ -1,1 +1,1 @@
-! 2goXhrcmd/slsa-provenance/main.go
+! 2goXkhr"cmd/slsa-provenance/cli/version.go

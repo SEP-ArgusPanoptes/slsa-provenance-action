@@ -1,1 +1,0 @@
-B 2jsonX	hr"test-data/materials-no-digest.json

@@ -1,2 +1,2 @@
 
- 2yamlX©hr.goreleaser.draft.yml
+ 2goX#hrpkg/intoto/materials.go
