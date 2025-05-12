@@ -1,1 +1,0 @@
-	 2goXÁhrpkg/intoto/intoto_test.go

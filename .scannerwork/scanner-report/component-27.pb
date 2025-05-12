@@ -1,1 +1,0 @@
- 2goXchr.cmd/slsa-provenance/cli/github-release_test.go

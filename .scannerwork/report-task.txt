@@ -1,7 +1,0 @@
-organization=sep-arguspanoptes
-projectKey=SEP-ArgusPanoptes_slsa-provenance-action
-serverUrl=https://sonarcloud.io
-serverVersion=8.0.0.63215
-dashboardUrl=https://sonarcloud.io/dashboard?id=SEP-ArgusPanoptes_slsa-provenance-action
-ceTaskId=AZbE_-IE5In_SysvrCvp
-ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZbE_-IE5In_SysvrCvp
