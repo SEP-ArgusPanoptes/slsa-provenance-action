@@ -1,0 +1,279 @@
+name: Continuous integration
+
+on:
+  push:
+  pull_request:
+    types: [ opened, reopened, synchronize ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-20.04
+
+    permissions:
+      contents: write # tests create releases
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # ratchet:actions/setup-go@v5.4.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Get dependencies
+        run: make download
+
+      - name: Lint
+        run: |
+          result="$(make  lint)"
+          echo "$result"
+          [ -n "$(echo "$result" | grep 'diff -u')" ] && exit 1 || exit 0
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: make test-race
+
+      - name: Coverage
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: make coverage-out
+
+      - name: Upload Code Coverage
+        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574 # ratchet:codecov/codecov-action@v5.4.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: true
+          verbose: true
+
+  release:
+    name: release
+    needs: [build]
+
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    outputs:
+      container_digest: ${{ steps.container_info.outputs.container_digest }}
+      container_tags: ${{ steps.container_info.outputs.container_tags }}
+      container_repos: ${{ steps.container_info.outputs.container_repos }}
+
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # ratchet:actions/setup-go@v5.4.0
+        with:
+          go-version-file: ./go.mod
+          check-latest: true
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # ratchet:sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # ratchet:anchore/sbom-action/download-syft@v0.18.0
+      - name: Login to Container registries
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u philipssoftware --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u ${{ github.actor }} --password-stdin ghcr.io
+
+      - name: Set release variables
+        id: release-vars
+        run: |
+          make release-vars > /tmp/spiffe-vault-release-vars.env
+          source /tmp/spiffe-vault-release-vars.env
+          if [[ -n "$LDFLAGS" ]]; then
+            echo "LDFLAGS=$LDFLAGS" >> $GITHUB_OUTPUT
+          fi
+          if [[ -n "$GIT_HASH" ]]; then
+            echo "GIT_HASH=$GIT_HASH" >> $GITHUB_OUTPUT
+          fi
+          rm -f /tmp/spiffe-vault-release-vars.env
+
+      - name: Release ${{ (!startsWith(github.ref, 'refs/tags/') && 'snapshot') || '' }}
+        uses: goreleaser/goreleaser-action@5742e2a039330cbb23ebf35f046f814d4c6ff811 # ratchet:goreleaser/goreleaser-action@v4
+        with:
+          version: latest
+          args: release --clean ${{ (!startsWith(github.ref, 'refs/tags/') && '--snapshot') || '' }} ${{ ((startsWith(github.ref, 'refs/tags/') && endsWith(github.ref, '-draft')) && '-f .goreleaser.draft.yml') || '' }}
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          LDFLAGS: ${{ steps.release-vars.outputs.LDFLAGS }}
+          GIT_HASH: ${{ steps.release-vars.outputs.GIT_HASH }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+
+      - name: Get container info
+        id: container_info
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          export CONTAINER_DIGEST="$(make container-digest GITHUB_REF=${{ github.ref_name }})"
+          echo "container_digest=$CONTAINER_DIGEST" >> $GITHUB_OUTPUT
+          echo "container_tags=$(make container-tags CONTAINER_DIGEST="${CONTAINER_DIGEST}" | paste -s -d ',' -)" >> $GITHUB_OUTPUT
+          echo "container_repos=$(make container-repos CONTAINER_DIGEST="${CONTAINER_DIGEST}" | jq --raw-input . | jq --slurp -c)" >> $GITHUB_OUTPUT
+
+      - name: Logout from Container registries
+        if: ${{ always() }}
+        run: |
+          docker logout
+          docker logout ghcr.io
+
+  sbom:
+    name: sbom
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-20.04
+    env:
+      TAGS: "${{ needs.release.outputs.container_tags }}"
+
+    strategy:
+      matrix:
+        repo: ${{ fromJSON(needs.release.outputs.container_repos) }}
+
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # ratchet:sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # ratchet:anchore/sbom-action/download-syft@v0.18.0
+      - name: Login to Container registries
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u philipssoftware --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u ${{ github.actor }} --password-stdin ghcr.io
+
+      - name: Attach SBOM
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        run: |
+          echo '${{ secrets.COSIGN_PUBLIC_KEY }}' > cosign.pub
+          IFS=,
+          for t in ${TAGS}; do
+            cosign verify --key cosign.pub ${{ matrix.repo }}:${t}
+            syft ${{ matrix.repo }}:${t} -o spdx-json > sbom-spdx.json
+            cosign attest --predicate sbom-spdx.json --type spdx --yes --key env://COSIGN_PRIVATE_KEY ${{ matrix.repo }}:${t}
+            cosign verify-attestation -o verified-sbom-spdx.json --key cosign.pub ${{ matrix.repo }}:${t}
+          done
+
+      - name: Clean up & Logout from Container registries
+        if: ${{ always() }}
+        run: |
+          docker logout
+          docker logout ghcr.io
+
+  provenance:
+    name: provenance
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Generate provenance for Release
+        uses: philips-labs/slsa-provenance-action@6b2fd198d38ba72fb3cc08fbc52da2ebaef2efad # ratchet:philips-labs/slsa-provenance-action@v0.9.0
+        with:
+          command: generate
+          subcommand: github-release
+          arguments: --artifact-path release-assets --output-path provenance.att --tag-name ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # ratchet:sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Sign provenance
+        run: |
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --output-signature "${SIGNATURE}" provenance.att
+          cat "${SIGNATURE}"
+
+          curl_args=(-s -H "Authorization: token ${GITHUB_TOKEN}")
+          curl_args+=(-H "Accept: application/vnd.github.v3+json")
+          release_id="$(curl "${curl_args[@]}" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases?per_page=10" | jq "map(select(.name == \"${GITHUB_REF_NAME}\"))" | jq -r '.[0].id')"
+
+          echo "Upload ${SIGNATURE} to release with id ${release_id}â€¦"
+          curl_args+=(-H "Content-Type: $(file -b --mime-type "${SIGNATURE}")")
+          curl "${curl_args[@]}" \
+            --data-binary @"${SIGNATURE}" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${SIGNATURE}"
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          SIGNATURE: provenance.att.sig
+
+  container-provenance:
+    name: container-provenance
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-20.04
+
+    strategy:
+      matrix:
+        repo: ${{ fromJSON(needs.release.outputs.container_repos) }}
+
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # ratchet:sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Generate provenance for ${{ matrix.repo }}
+        uses: philips-labs/slsa-provenance-action@6b2fd198d38ba72fb3cc08fbc52da2ebaef2efad # ratchet:philips-labs/slsa-provenance-action@v0.9.0
+        with:
+          command: generate
+          subcommand: container
+          arguments: --repository ${{ matrix.repo }} --output-path provenance.att --digest ${{ needs.release.outputs.container_digest }} --tags ${{ needs.release.outputs.container_tags }}
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Get slsa-provenance predicate
+        run: |
+          cat provenance.att | jq .predicate > provenance-predicate.att
+
+      - name: Login to Container registries
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u philipssoftware --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u ${{ github.actor }} --password-stdin ghcr.io
+
+      - name: Attach provenance to image
+        run: |
+          cosign attest --predicate provenance-predicate.att --type slsaprovenance --yes --key env://COSIGN_PRIVATE_KEY ${{ matrix.repo }}@${{ needs.release.outputs.container_digest }}
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+
+      - name: Verify attestation
+        run: |
+          echo '${{ secrets.COSIGN_PUBLIC_KEY }}' > cosign.pub
+          cosign verify-attestation --key cosign.pub ${{ matrix.repo }}@${{ needs.release.outputs.container_digest }}
+
+      - name: Logout from Container registries
+        if: ${{ always() }}
+        run: |
+          docker logout
+          docker logout ghcr.io

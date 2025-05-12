@@ -1,0 +1,1 @@
+  2goX1hr'cmd/slsa-provenance/cli/version_test.go
