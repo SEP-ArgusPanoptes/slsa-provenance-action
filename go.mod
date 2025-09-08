@@ -1,6 +1,6 @@
 module github.com/philips-labs/slsa-provenance-action
 
-go 1.23.0
+go 1.24.0
 
 toolchain go1.24.3
 
@@ -11,7 +11,7 @@ require (
 	github.com/google/go-github/v41 v41.0.0
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
-	golang.org/x/oauth2 v0.30.0
+	golang.org/x/oauth2 v0.31.0
 )
 
 require (
